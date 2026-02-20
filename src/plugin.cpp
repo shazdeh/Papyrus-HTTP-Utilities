@@ -164,6 +164,22 @@ bool GetJSONBool(StaticFunctionTag*, int a_handle, const std::string a_path, boo
     return GetJSONValue<bool>(a_handle, a_path, a_default);
 }
 
+int GetJSONArrayLength(StaticFunctionTag*, int a_handle, const std::string a_path) {
+    std::lock_guard<std::mutex> lock(requestMutex);
+    auto it = requests.find(a_handle);
+    if (it == requests.end()) return 0;
+
+    try {
+        nlohmann::json::json_pointer ptr(a_path);
+        const auto& node = it->second.json.at(ptr);
+
+        if (node.is_array()) return static_cast<int>(node.size());
+    } catch (...) {
+    }
+
+    return 0;
+}
+
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kPostLoadGame) {
         std::lock_guard<std::mutex> lock(requestMutex);
@@ -183,6 +199,7 @@ bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {
     vm->RegisterFunction("GetJSONFloat", "HTTPUtils", GetJSONFloat);
     vm->RegisterFunction("GetJSONInt", "HTTPUtils", GetJSONInt);
     vm->RegisterFunction("GetJSONBool", "HTTPUtils", GetJSONBool);
+    vm->RegisterFunction("GetJSONArrayLength", "HTTPUtils", GetJSONArrayLength);
 
     return false;
 }
