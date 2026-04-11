@@ -108,7 +108,7 @@ int CreateRequest(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID st
                 if (response.status_code == 200) {
                     if (isJSON) {
                         try {
-                            req.json = JSON::parse(response.text);
+                            req.json = JSON::parse(response.text, nullptr, false);
                             if (!req.json.is_discarded()) {
                                 req.jsonValidated = true;
                             }
@@ -268,6 +268,49 @@ std::string FormatJSON(StaticFunctionTag*, std::vector<std::string> a_Keys, std:
     return output;
 }
 
+// Simple URL encoder
+std::string _UrlEncode(const std::string& value) {
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
+
+    for (const char c : value) {
+        if (isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
+            escaped << c;
+        } else {
+            escaped << '%' << std::uppercase << std::setw(2) << int((unsigned char)c) << std::nouppercase;
+        }
+    }
+
+    return escaped.str();
+}
+
+std::string EncodeURL(StaticFunctionTag*, std::string a_Url, std::vector<std::string> a_Keys,
+                      std::vector<std::string> a_Values, bool a_lowercaseKeys = false) {
+    if (a_Keys.empty() || a_Keys.size() != a_Values.size()) return a_Url;
+
+    std::ostringstream output;
+    output << a_Url;
+
+    // Add ? or &
+    if (a_Url.find('?') == std::string::npos) {
+        output << '?';
+    } else {
+        output << '&';
+    }
+
+    for (size_t i = 0; i < a_Keys.size(); ++i) {
+        std::string key = a_Keys[i];
+        if (a_lowercaseKeys) {
+            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+        }
+        output << _UrlEncode(key) << '=' << _UrlEncode(a_Values[i]);
+        if (i < a_Keys.size() - 1) output << '&';
+    }
+
+    return output.str();
+}
+
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
         CSimpleIniA ini;
@@ -291,7 +334,7 @@ void ParseOpenAIResponse(cpr::Response& response) {
     std::string result;
 
     try {
-        JSON json = JSON::parse(response.text);
+        JSON json = JSON::parse(response.text, nullptr, false);
         if (json.is_discarded()) return;
 
         if (json.contains("output")) {  // Responses API
@@ -370,6 +413,7 @@ bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {
 
     // utilities
     vm->RegisterFunction("FormatJSON", scriptName, FormatJSON);
+    vm->RegisterFunction("EncodeURL", scriptName, EncodeURL);
 
     // AI
     vm->RegisterFunction("AIPrompt", scriptName, AIPrompt);

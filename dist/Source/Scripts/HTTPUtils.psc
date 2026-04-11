@@ -41,9 +41,12 @@ Int Function GetJSONArrayLength(Int aiHandle, String asPath) Global Native
 ; Utilities
 ;----------------------------------------------------------------------------------------------------------
 
-; take an array of keys and an array of values, returns the result formatted as JSON object
+; take two arrays of key & value pairs, returns the result formatted as JSON object
 ; @param aiLowercaseKeys Weather to convert the asKeys array to lowercase, to overcome Papyrus' case insensitivity
 String Function FormatJSON(String[] asKeys, String[] asValues, Bool aiLowercaseKeys = False) Global Native
+
+; take two arrays of key & value pairs and updates URL parameters in the asURL
+String Function EncodeURL(String asURL, String[] asKeys, String[] asValues, Bool aiLowercaseKeys = False) Global Native
 
 
 ;----------------------------------------------------------------------------------------------------------
