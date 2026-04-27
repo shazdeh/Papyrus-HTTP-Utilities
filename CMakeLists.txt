@@ -85,6 +85,7 @@ target_include_directories(
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE IS_HOST_PLUGIN)
+target_compile_definitions(${PROJECT_NAME} PRIVATE CPR_CURL_NOSIGNAL)
 
 find_package(cpr CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE cpr::cpr)

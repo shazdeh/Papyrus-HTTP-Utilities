@@ -3,12 +3,20 @@
 #include <cpr/cpr.h>
 #include "nlohmann/json.hpp"
 #include "../external/simpleini/SimpleIni.h"
+#include <chrono>
 
 using JSON = nlohmann::json;
 
 std::string aiEndpoint = "";
 std::string aiModel = "";
 std::string aiApikey = "";
+bool debug = false;
+
+// Timing helpers
+inline auto Now() { return std::chrono::steady_clock::now(); }
+inline double DurationMs(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Now() - start).count();
+}
 
 void to_lowercase(std::string& s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -30,6 +38,9 @@ template <class... Args>
 void CallPapyrus(VMHandle a_handle, std::string scriptName, std::string methodName,
                  Args... args)
 {
+    auto start = Now();
+    if (debug) SPDLOG_INFO("CallPapyrus: handle={} script={} method={}", a_handle, scriptName, methodName);
+
     static auto* vm = BSScript::Internal::VirtualMachine::GetSingleton();
     static auto* policy = vm->GetObjectHandlePolicy();
 
@@ -37,12 +48,14 @@ void CallPapyrus(VMHandle a_handle, std::string scriptName, std::string methodNa
     BSTSmartPointer<BSScript::IStackCallbackFunctor> callback;
 
     if (!vm->FindBoundObject(a_handle, scriptName.data(), papyrusObject)) {
+        if (debug) SPDLOG_WARN("CallPapyrus: object not found for handle={}", a_handle);
         return;
     }
 
     auto packed = MakeFunctionArguments(std::decay_t<Args>(args)...);
-
     vm->DispatchMethodCall1(papyrusObject, methodName, packed, callback);
+
+    if (debug) SPDLOG_INFO("CallPapyrus: method={} completed in {}ms", methodName, DurationMs(start));
 }
 
 int CreateHandle(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID stackID, TESForm* a_form) {
@@ -63,6 +76,7 @@ int CreateRequest(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID st
                     std::vector<std::string> a_HeaderKeys = std::vector<std::string>(),
                     std::vector<std::string> a_HeaderValues = std::vector<std::string>(),
                     std::function<void(cpr::Response& response)> a_callback = nullptr) {
+    auto start = Now();
     int handle = CreateHandle(vm, stackID, a_form);
     std::shared_ptr<std::atomic_bool> canceledFlag;
     {
@@ -70,8 +84,8 @@ int CreateRequest(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID st
         canceledFlag = requests[handle].canceled;
     }
 
-    std::jthread([a_url, a_timeout, handle, canceledFlag, a_paramKeys, a_paramValues, postBody, isJSON, isGET,
-                  a_HeaderKeys, a_HeaderValues, a_callback]() {
+    std::jthread([=]() {
+        if (debug) SPDLOG_INFO("Thread started for handle={}", handle);
         cpr::Header header;
         if (isJSON) header["Content-Type"] = "application/json";
         if (!a_HeaderKeys.empty() && a_HeaderKeys.size() == a_HeaderValues.size()) {
@@ -92,34 +106,49 @@ int CreateRequest(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID st
         } else {
             response = cpr::Post(cpr::Url{a_url}, cpr::Timeout{a_timeout}, cpr::Body{postBody}, header);
         }
+        if (debug) SPDLOG_INFO("Request finished for handle={} status={} elapsed={}ms", handle, response.status_code, DurationMs(start));
         if (canceledFlag->load()) return; // game was reloaded maybe?
 
         if (a_callback) {
             a_callback(response);
         }
 
-        SKSE::GetTaskInterface()->AddTask([response = std::move(response), handle, canceledFlag, isJSON, a_callback]() {
-            if (canceledFlag->load()) return;  // another safety check
+        SKSE::GetTaskInterface()->AddTask([response = std::move(response), handle, canceledFlag, isJSON]() mutable {
+            if (canceledFlag->load()) return;
+            auto vmStart = Now();
+            if (debug) SPDLOG_INFO("Task executing for handle={} status={}", handle, response.status_code);
 
-            std::lock_guard<std::mutex> lock(requestMutex);
-            auto it = requests.find(handle);
-            if (it != requests.end()) {
-                auto& req = it->second;
-                if (response.status_code == 200) {
-                    if (isJSON) {
-                        try {
-                            req.json = JSON::parse(response.text, nullptr, false);
-                            if (!req.json.is_discarded()) {
-                                req.jsonValidated = true;
-                            }
-                        } catch (...) {
+            std::string scriptName;
+            VMHandle vmhandle;
+
+            {
+                std::lock_guard<std::mutex> lock(requestMutex);
+                auto it = requests.find(handle);
+                if (it == requests.end()) return;
+
+                scriptName = it->second.scriptName;
+                vmhandle = it->second.vmhandle;
+
+                if (response.status_code == 200 && isJSON) {
+                    try {
+                        JSON parsed = JSON::parse(response.text, nullptr, false);
+                        if (!parsed.is_discarded()) {
+                            it->second.json = std::move(parsed);
+                            it->second.jsonValidated = true;
                         }
+                    } catch (...) {
                     }
-                    CallPapyrus(req.vmhandle, req.scriptName, "OnRequestSuccess", handle, response.text);
-                } else {
-                    CallPapyrus(req.vmhandle, req.scriptName, "OnRequestFail", handle, (int)response.status_code);
                 }
+            }  // mutex released, does this help?
+
+            if (response.status_code == 200) {
+                if (debug) SPDLOG_INFO("Dispatching OnRequestSuccess for handle={}", handle);
+                CallPapyrus(vmhandle, scriptName, "OnRequestSuccess", handle, response.text);
+            } else {
+                if (debug) SPDLOG_INFO("Dispatching OnRequestFail for handle={} code={}", handle, response.status_code);
+                CallPapyrus(vmhandle, scriptName, "OnRequestFail", handle, static_cast<int>(response.status_code));
             }
+            if (debug) SPDLOG_INFO("VM dispatch for handle={} took {}ms", handle, DurationMs(vmStart));
         });
     }).detach();
 
@@ -318,6 +347,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
             aiApikey = ini.GetValue("AI", "API_Key");
             aiEndpoint = ini.GetValue("AI", "URL");
             aiModel = ini.GetValue("AI", "Model");
+            debug = ini.GetBoolValue("Debug", "Enabled", false);
         }
     } else if (message->type == SKSE::MessagingInterface::kPostLoadGame) {
         std::lock_guard<std::mutex> lock(requestMutex);
