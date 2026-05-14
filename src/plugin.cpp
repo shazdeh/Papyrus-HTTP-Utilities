@@ -10,6 +10,9 @@ using JSON = nlohmann::json;
 std::string aiEndpoint = "";
 std::string aiModel = "";
 std::string aiApikey = "";
+std::string proxyType = "";
+std::string proxyHost = "";
+std::string proxyPort = "";
 bool debug = false;
 
 // Timing helpers
@@ -86,6 +89,17 @@ int CreateRequest(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID st
 
     std::jthread([=]() {
         if (debug) SPDLOG_INFO("Thread started for handle={}", handle);
+        cpr::Session session;
+        session.SetOption(cpr::Url{a_url});
+        session.SetOption(cpr::Timeout{a_timeout});
+
+        if (!proxyHost.empty() && !proxyType.empty() && !proxyPort.empty()) {
+            std::string proxy = proxyType + "://" + proxyHost + ":" + proxyPort;
+            session.SetOption(cpr::Proxies{{"http", proxy}, {"https", proxy}});
+            // disable CRL/OCSP revocation checking
+            curl_easy_setopt(session.GetCurlHolder()->handle, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NO_REVOKE);
+        }
+
         cpr::Header header;
         if (isJSON) header["Content-Type"] = "application/json";
         if (!a_HeaderKeys.empty() && a_HeaderKeys.size() == a_HeaderValues.size()) {
@@ -93,6 +107,7 @@ int CreateRequest(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID st
                 header[a_HeaderKeys[i]] = a_HeaderValues[i];
             }
         }
+        session.SetOption(header);
 
         cpr::Response response;
         if (isGET) {
@@ -102,9 +117,11 @@ int CreateRequest(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID st
                     params.Add({a_paramKeys[i], a_paramValues[i]});
                 }
             }
-            response = cpr::Get(cpr::Url{a_url}, cpr::Timeout{a_timeout}, params, header);
+            session.SetOption(params);
+            response = session.Get();
         } else {
-            response = cpr::Post(cpr::Url{a_url}, cpr::Timeout{a_timeout}, cpr::Body{postBody}, header);
+            session.SetOption(cpr::Body{postBody});
+            response = session.Post();
         }
         if (debug) SPDLOG_INFO("Request finished for handle={} status={} elapsed={}ms", handle, response.status_code, DurationMs(start));
         if (canceledFlag->load()) return; // game was reloaded maybe?
@@ -145,7 +162,9 @@ int CreateRequest(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID st
                 if (debug) SPDLOG_INFO("Dispatching OnRequestSuccess for handle={}", handle);
                 CallPapyrus(vmhandle, scriptName, "OnRequestSuccess", handle, response.text);
             } else {
-                if (debug) SPDLOG_INFO("Dispatching OnRequestFail for handle={} code={}", handle, response.status_code);
+                if (debug)
+                    SPDLOG_INFO("Dispatching OnRequestFail for handle={} code={}, error: {}", handle,
+                                response.status_code, response.error.message);
                 CallPapyrus(vmhandle, scriptName, "OnRequestFail", handle, static_cast<int>(response.status_code));
             }
             if (debug) SPDLOG_INFO("VM dispatch for handle={} took {}ms", handle, DurationMs(vmStart));
@@ -348,6 +367,10 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
             aiEndpoint = ini.GetValue("AI", "URL");
             aiModel = ini.GetValue("AI", "Model");
             debug = ini.GetBoolValue("Debug", "Enabled", false);
+            proxyType = ini.GetValue("Proxy", "Type");
+            proxyHost = ini.GetValue("Proxy", "Host");
+            proxyPort = ini.GetValue("Proxy", "Port");
+
         }
     } else if (message->type == SKSE::MessagingInterface::kPostLoadGame) {
         std::lock_guard<std::mutex> lock(requestMutex);
