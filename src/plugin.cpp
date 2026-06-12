@@ -2,7 +2,7 @@
 #include <thread>
 #include <cpr/cpr.h>
 #include "nlohmann/json.hpp"
-#include "../external/simpleini/SimpleIni.h"
+#include "SimpleIni.h"
 #include <chrono>
 
 using JSON = nlohmann::json;

@@ -13,7 +13,8 @@
     "directxtk",
     "skse-mcp",
     "cpr",
-    "nlohmann-json"
+    "nlohmann-json",
+    "simpleini"
   ],
   "overrides": [
     {
