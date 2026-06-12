@@ -363,13 +363,13 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
         CSimpleIniA ini;
         if (ini.LoadFile("Data/SKSE/Plugins/PapyrusHTTP.ini") == SI_OK) {
-            aiApikey = ini.GetValue("AI", "API_Key");
-            aiEndpoint = ini.GetValue("AI", "URL");
-            aiModel = ini.GetValue("AI", "Model");
+            aiApikey = ini.GetValue("AI", "API_Key", "");
+            aiEndpoint = ini.GetValue("AI", "URL", "");
+            aiModel = ini.GetValue("AI", "Model", "");
             debug = ini.GetBoolValue("Debug", "Enabled", false);
-            proxyType = ini.GetValue("Proxy", "Type");
-            proxyHost = ini.GetValue("Proxy", "Host");
-            proxyPort = ini.GetValue("Proxy", "Port");
+            proxyType = ini.GetValue("Proxy", "Type", "");
+            proxyHost = ini.GetValue("Proxy", "Host", "");
+            proxyPort = ini.GetValue("Proxy", "Port", "");
 
         }
     } else if (message->type == SKSE::MessagingInterface::kPostLoadGame) {
