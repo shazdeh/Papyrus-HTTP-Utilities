@@ -7,6 +7,8 @@
 
 using JSON = nlohmann::json;
 
+std::vector<int> GetPluginVersion(StaticFunctionTag*) { return {1, 0, 4}; }
+
 std::string aiEndpoint = "";
 std::string aiModel = "";
 std::string aiApikey = "";
@@ -23,6 +25,13 @@ inline double DurationMs(std::chrono::steady_clock::time_point start) {
 
 void to_lowercase(std::string& s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+}
+
+void sanitize_key(std::string& input) {
+    std::string::size_type pos = 0;
+    while ((pos = input.find("###", pos)) != std::string::npos) {
+        input.erase(pos, 3);
+    }
 }
 
 struct Request {
@@ -155,6 +164,7 @@ int CreateRequest(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID st
                         }
                     } catch (...) {
                     }
+                    response.text = ""; // save some VM memory by omitting the JSON response
                 }
             }  // mutex released, does this help?
 
@@ -244,6 +254,12 @@ void Destroy(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID stackID
     }
 }
 
+bool ValidateHandle(StaticFunctionTag*, int a_handle) {
+    std::lock_guard<std::mutex> lock(requestMutex);
+    auto it = requests.find(a_handle);
+    return it != requests.end();
+}
+
 bool ValidateJSON(StaticFunctionTag*, int a_handle) {
     std::lock_guard<std::mutex> lock(requestMutex);
     auto it = requests.find(a_handle);
@@ -252,11 +268,12 @@ bool ValidateJSON(StaticFunctionTag*, int a_handle) {
 }
 
 template <typename T>
-T GetJSONValue(int a_handle, const std::string a_path, T a_default) {
+T GetJSONValue(int a_handle, std::string a_path, T a_default) {
     std::lock_guard<std::mutex> lock(requestMutex);
     auto it = requests.find(a_handle);
     if (it == requests.end()) return a_default;
 
+    sanitize_key(a_path);
     try {
         nlohmann::json::json_pointer ptr(a_path);
 
@@ -447,13 +464,138 @@ int AIPrompt(BSScript::Internal::VirtualMachine* vm, const RE::VMStackID stackID
                          headerValues, ParseOpenAIResponse);
 }
 
+template <typename T>
+std::vector<T> GetJSONValueA(int a_handle, std::string a_path, int a_startIndex = 0,
+                         int a_endIndex = 0) {
+    std::lock_guard<std::mutex> lock(requestMutex);
+    std::vector<T> result;
+    auto it = requests.find(a_handle);
+    if (it == requests.end()) return result;
+
+    sanitize_key(a_path);
+
+    try {
+        nlohmann::json::json_pointer ptr(a_path);
+        const auto& node = it->second.json.at(ptr);
+        if (node.is_array()) {
+            if (a_startIndex >= node.size()) return result;
+            if (a_endIndex <= a_startIndex || a_endIndex > node.size()) a_endIndex = node.size();
+            for (int i = a_startIndex; i < a_endIndex; i++) {
+                result.push_back(node[i].get<T>());
+            }
+        }
+    } catch (...) {
+    }
+
+    return result;
+}
+
+std::vector<std::string> GetJSONStringA(StaticFunctionTag*, int a_handle, const std::string a_path,
+                                        int a_startIndex = 0, int a_endIndex = 0) {
+    return GetJSONValueA<std::string>(a_handle, a_path, a_startIndex, a_endIndex);
+}
+
+std::vector<int> GetJSONIntA(StaticFunctionTag*, int a_handle, const std::string a_path, int a_startIndex = 0,
+                             int a_endIndex = 0) {
+    return GetJSONValueA<int>(a_handle, a_path, a_startIndex, a_endIndex);
+}
+
+std::vector<float> GetJSONFloatA(StaticFunctionTag*, int a_handle, const std::string a_path, int a_startIndex = 0,
+                                 int a_endIndex = 0) {
+    return GetJSONValueA<float>(a_handle, a_path, a_startIndex, a_endIndex);
+}
+
+std::vector<bool> GetJSONBoolA(StaticFunctionTag*, int a_handle, const std::string a_path, int a_startIndex = 0,
+                               int a_endIndex = 0) {
+    return GetJSONValueA<bool>(a_handle, a_path, a_startIndex, a_endIndex);
+}
+
+template <typename T>
+std::vector<T> PluckJSON(int a_handle, std::string a_path, std::string a_key, T a_default, int a_startIndex = 0,
+                         int a_endIndex = 0, bool a_preserveIndex = false) {
+    std::lock_guard<std::mutex> lock(requestMutex);
+    std::vector<T> result;
+    auto it = requests.find(a_handle);
+    if (it == requests.end()) return result;
+
+    sanitize_key(a_path);
+    sanitize_key(a_key);
+
+    try {
+        nlohmann::json::json_pointer ptr(a_path);
+        const auto& node = it->second.json.at(ptr);
+        if (node.is_array()) {
+            if (a_startIndex >= node.size()) return result;
+            if (a_endIndex <= a_startIndex || a_endIndex > node.size()) a_endIndex = node.size();
+            for (int i = a_startIndex; i < a_endIndex; i++) {
+                auto& item = node[i];
+                if (item.contains(a_key)) {
+                    result.push_back(item.at(a_key).get<T>());
+                } else if (a_preserveIndex) {
+                    result.push_back(a_default);
+                }
+            }
+        }
+    } catch (...) {
+    }
+
+    return result;
+}
+
+std::vector<std::string> PluckJSONStringA(StaticFunctionTag*, int a_handle, std::string a_path,
+                                          std::string a_key, int a_startIndex = 0, int a_endIndex = 0,
+                                        bool a_keepIndexes = false, std::string a_default = "") {
+    return PluckJSON<std::string>(a_handle, a_path, a_key, a_default, a_startIndex, a_endIndex, a_keepIndexes);
+}
+
+std::vector<int> PluckJSONIntA(StaticFunctionTag*, int a_handle, std::string a_path,
+                                          std::string a_key, int a_startIndex = 0, int a_endIndex = 0, bool a_keepIndexes = false,
+                               int a_default = 0) {
+    return PluckJSON<int>(a_handle, a_path, a_key, a_default, a_startIndex, a_endIndex, a_keepIndexes);
+}
+
+std::vector<float> PluckJSONFloatA(StaticFunctionTag*, int a_handle, std::string a_path,
+                                          std::string a_key, int a_startIndex = 0, int a_endIndex = 0, bool a_keepIndexes = false,
+                                   float a_default = 0.0f) {
+    return PluckJSON<float>(a_handle, a_path, a_key, a_default, a_startIndex, a_endIndex, a_keepIndexes);
+}
+
+std::vector<bool> PluckJSONBoolA(StaticFunctionTag*, int a_handle, std::string a_path,
+                                          std::string a_key, int a_startIndex = 0, int a_endIndex = 0, bool a_keepIndexes = false,
+                                   bool a_default = false) {
+    return PluckJSON<bool>(a_handle, a_path, a_key, a_default, a_startIndex, a_endIndex, a_keepIndexes);
+}
+
+int LoadJSONFile(StaticFunctionTag*, const std::string a_path) {
+    const std::filesystem::path file = "Data/" + a_path;
+    if (!std::filesystem::exists(file)) return -1;
+    std::ifstream ifile{file};
+    if (!ifile) return -1;
+    Request newObject{};
+    try {
+        JSON parsed = JSON::parse(ifile, nullptr, false);
+        if (!parsed.is_discarded()) {
+            newObject.json = std::move(parsed);
+            newObject.jsonValidated = true;
+            requests.emplace(++lastHandle, newObject);
+            return lastHandle;
+        }
+    } catch (...) {
+    }
+
+    return -1;
+}
+
 bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {
     std::string_view scriptName = "HTTPUtils";
+
+    vm->RegisterFunction("GetVersion", scriptName, GetPluginVersion);
 
     vm->RegisterFunction("Request_GET", scriptName, Request_GET);
     vm->RegisterFunction("RequestJSON_GET", scriptName, RequestJSON_GET);
     vm->RegisterFunction("Request_POST", scriptName, Request_POST);
     vm->RegisterFunction("RequestJSON_POST", scriptName, RequestJSON_POST);
+    vm->RegisterFunction("ValidateHandle", scriptName, ValidateHandle);
     vm->RegisterFunction("Destroy", scriptName, Destroy);
 
     // JSON response
@@ -463,6 +605,17 @@ bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {
     vm->RegisterFunction("GetJSONInt", scriptName, GetJSONInt);
     vm->RegisterFunction("GetJSONBool", scriptName, GetJSONBool);
     vm->RegisterFunction("GetJSONArrayLength", scriptName, GetJSONArrayLength);
+    vm->RegisterFunction("GetJSONStringA", scriptName, GetJSONStringA);
+    vm->RegisterFunction("GetJSONIntA", scriptName, GetJSONIntA);
+    vm->RegisterFunction("GetJSONFloatA", scriptName, GetJSONFloatA);
+    vm->RegisterFunction("GetJSONBoolA", scriptName, GetJSONBoolA);
+    vm->RegisterFunction("PluckJSONStringA", scriptName, PluckJSONStringA);
+    vm->RegisterFunction("PluckJSONIntA", scriptName, PluckJSONIntA);
+    vm->RegisterFunction("PluckJSONFloatA", scriptName, PluckJSONFloatA);
+    vm->RegisterFunction("PluckJSONBoolA", scriptName, PluckJSONBoolA);
+
+    // file
+    vm->RegisterFunction("LoadJSONFile", scriptName, LoadJSONFile);
 
     // utilities
     vm->RegisterFunction("FormatJSON", scriptName, FormatJSON);
