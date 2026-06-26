@@ -37,6 +37,12 @@ String Function GetJSONString(Int aiHandle, String asPath, String asDefault = ""
 Int Function GetJSONInt(Int aiHandle, String asPath, Int asDefault = 0) Global Native
 Float Function GetJSONFloat(Int aiHandle, String asPath, Float asDefault = 0.0) Global Native
 Bool Function GetJSONBool(Int aiHandle, String asPath, Bool asDefault = False) Global Native
+; retreive a value and interpret it as a FormID, then returns the Form
+; FormID must be in one of the following format:
+;   - Editor ID (e.g., "BearPelt")
+;   - Plugin~FormID (e.g., "0x12345~Skyrim.esm")
+;   - Hex FormID (e.g., "0x00012345")
+Form Function GetJSONForm(Int aiHandle, String asPath) Global Native
 
 ; returns the number of array items located at asPath
 Int Function GetJSONArrayLength(Int aiHandle, String asPath) Global Native
@@ -46,6 +52,12 @@ String[] Function GetJSONStringA(Int aiHandle, String asPath, Int aiStartIndex =
 Int[] Function GetJSONIntA(Int aiHandle, String asPath, Int aiStartIndex = 0, Int aiEndIndex = 0) Global Native
 Float[] Function GetJSONFloatA(Int aiHandle, String asPath, Int aiStartIndex = 0, Int aiEndIndex = 0) Global Native
 Bool[] Function GetJSONBoolA(Int aiHandle, String asPath, Int aiStartIndex = 0, Int aiEndIndex = 0) Global Native
+; retreives the array at asPath, then interpret each value as a FormID.
+; FormIDs must be in one of the following format:
+;   - Editor ID (e.g., "BearPelt")
+;   - Plugin~FormID (e.g., "0x12345~Skyrim.esm")
+;   - Hex FormID (e.g., "0x00012345")
+Form[] Function GetJSONFormA(Int aiHandle, String asPath, Int aiStartIndex = 0, Int aiEndIndex = 0) Global Native
 
 ; Returns a property value from each object in a JSON array of objects
 ; @param abPreserveIndexes Weather to skip invalid items in the array (default behavior), or use the default value so keep indexes consistent
@@ -53,6 +65,12 @@ String[] Function PluckJSONStringA(Int aiHandle, String asPathToArray, String as
 Int[] Function PluckJSONIntA(Int aiHandle, String asPathToArray, String asObjectKey, Int aiStartIndex = 0, Int aiEndIndex = 0, Bool abPreserveIndexes = False, Int asDefault = 0) Global Native
 Float[] Function PluckJSONFloatA(Int aiHandle, String asPathToArray, String asObjectKey, Int aiStartIndex = 0, Int aiEndIndex = 0, Bool abPreserveIndexes = False, Float asDefault = 0.0) Global Native
 Bool[] Function PluckJSONBoolA(Int aiHandle, String asPathToArray, String asObjectKey, Int aiStartIndex = 0, Int aiEndIndex = 0, Bool abPreserveIndexes = False, Bool asDefault = False) Global Native
+; Looks for an array of objects at asPathToArray, interprets each property key (asObjectKey) as a FormID.
+; FormIDs must be in one of the following format:
+;   - Editor ID (e.g., "BearPelt")
+;   - Plugin~FormID (e.g., "0x12345~Skyrim.esm")
+;   - Hex FormID (e.g., "0x00012345")
+Form[] Function PluckJSONFormA(Int aiHandle, String asPathToArray, String asObjectKey, Int aiStartIndex = 0, Int aiEndIndex = 0, Bool abPreserveIndexes = False) Global Native
 
 
 ;----------------------------------------------------------------------------------------------------------

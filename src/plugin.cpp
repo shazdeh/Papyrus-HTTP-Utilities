@@ -4,6 +4,7 @@
 #include "nlohmann/json.hpp"
 #include "SimpleIni.h"
 #include <chrono>
+#include "CLibUtilsQTR/FormReader.hpp"
 
 using JSON = nlohmann::json;
 
@@ -27,11 +28,24 @@ void to_lowercase(std::string& s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 }
 
+std::string lowercase(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
 void sanitize_key(std::string& input) {
     std::string::size_type pos = 0;
     while ((pos = input.find("###", pos)) != std::string::npos) {
         input.erase(pos, 3);
     }
+}
+
+TESForm* resolveForm(const std::string& id) {
+    auto formID = FormReader::GetFormEditorIDFromString(id);
+    if (formID) {
+        return TESForm::LookupByID(formID);
+    }
+    return nullptr;
 }
 
 struct Request {
@@ -302,6 +316,11 @@ bool GetJSONBool(StaticFunctionTag*, int a_handle, const std::string a_path, boo
     return GetJSONValue<bool>(a_handle, a_path, a_default);
 }
 
+TESForm* GetJSONForm(StaticFunctionTag*, int a_handle, const std::string a_path) {
+    std::string value = GetJSONValue<std::string>(a_handle, a_path, "");
+    return resolveForm(value);
+}
+
 int GetJSONArrayLength(StaticFunctionTag*, int a_handle, const std::string a_path) {
     std::lock_guard<std::mutex> lock(requestMutex);
     auto it = requests.find(a_handle);
@@ -510,6 +529,16 @@ std::vector<bool> GetJSONBoolA(StaticFunctionTag*, int a_handle, const std::stri
     return GetJSONValueA<bool>(a_handle, a_path, a_startIndex, a_endIndex);
 }
 
+std::vector<TESForm*> GetJSONFormA(StaticFunctionTag*, int a_handle, const std::string a_path, int a_startIndex = 0,
+                                   int a_endIndex = 0) {
+    std::vector<TESForm*> result;
+    auto array = GetJSONStringA(nullptr, a_handle, a_path, a_startIndex, a_endIndex);
+    for (const auto& item : array) {
+        result.push_back(resolveForm(item));
+    }
+    return result;
+}
+
 template <typename T>
 std::vector<T> PluckJSON(int a_handle, std::string a_path, std::string a_key, T a_default, int a_startIndex = 0,
                          int a_endIndex = 0, bool a_preserveIndex = false) {
@@ -520,6 +549,7 @@ std::vector<T> PluckJSON(int a_handle, std::string a_path, std::string a_key, T 
 
     sanitize_key(a_path);
     sanitize_key(a_key);
+    to_lowercase(a_key);
 
     try {
         nlohmann::json::json_pointer ptr(a_path);
@@ -529,9 +559,17 @@ std::vector<T> PluckJSON(int a_handle, std::string a_path, std::string a_key, T 
             if (a_endIndex <= a_startIndex || a_endIndex > node.size()) a_endIndex = node.size();
             for (int i = a_startIndex; i < a_endIndex; i++) {
                 auto& item = node[i];
-                if (item.contains(a_key)) {
-                    result.push_back(item.at(a_key).get<T>());
-                } else if (a_preserveIndex) {
+                bool found = false;
+                // instead of item.at(), we loop the properties to do a
+                // case-insensitive search for a_key
+                for (auto& [key, value] : item.items()) {
+                    if (lowercase(key) == a_key) {
+                        result.push_back(value.get<T>());
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found && a_preserveIndex) {
                     result.push_back(a_default);
                 }
             }
@@ -564,6 +602,19 @@ std::vector<bool> PluckJSONBoolA(StaticFunctionTag*, int a_handle, std::string a
                                           std::string a_key, int a_startIndex = 0, int a_endIndex = 0, bool a_keepIndexes = false,
                                    bool a_default = false) {
     return PluckJSON<bool>(a_handle, a_path, a_key, a_default, a_startIndex, a_endIndex, a_keepIndexes);
+}
+
+std::vector<TESForm*> PluckJSONFormA(StaticFunctionTag*, int a_handle, std::string a_path,
+                                          std::string a_key, int a_startIndex = 0, int a_endIndex = 0, bool a_keepIndexes = false) {
+    std::vector<TESForm*> result;
+    auto array = PluckJSONStringA(nullptr, a_handle, a_path, a_key, a_startIndex, a_endIndex, a_keepIndexes);
+    for (const auto& item : array) {
+        auto resolvedForm = resolveForm(item);
+        if (a_keepIndexes || (resolvedForm)) {
+            result.push_back(resolvedForm);
+        }
+    }
+    return result;
 }
 
 int LoadJSONFile(StaticFunctionTag*, const std::string a_path) {
@@ -604,15 +655,18 @@ bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {
     vm->RegisterFunction("GetJSONFloat", scriptName, GetJSONFloat);
     vm->RegisterFunction("GetJSONInt", scriptName, GetJSONInt);
     vm->RegisterFunction("GetJSONBool", scriptName, GetJSONBool);
+    vm->RegisterFunction("GetJSONForm", scriptName, GetJSONForm);
     vm->RegisterFunction("GetJSONArrayLength", scriptName, GetJSONArrayLength);
     vm->RegisterFunction("GetJSONStringA", scriptName, GetJSONStringA);
     vm->RegisterFunction("GetJSONIntA", scriptName, GetJSONIntA);
     vm->RegisterFunction("GetJSONFloatA", scriptName, GetJSONFloatA);
     vm->RegisterFunction("GetJSONBoolA", scriptName, GetJSONBoolA);
+    vm->RegisterFunction("GetJSONFormA", scriptName, GetJSONFormA);
     vm->RegisterFunction("PluckJSONStringA", scriptName, PluckJSONStringA);
     vm->RegisterFunction("PluckJSONIntA", scriptName, PluckJSONIntA);
     vm->RegisterFunction("PluckJSONFloatA", scriptName, PluckJSONFloatA);
     vm->RegisterFunction("PluckJSONBoolA", scriptName, PluckJSONBoolA);
+    vm->RegisterFunction("PluckJSONFormA", scriptName, PluckJSONFormA);
 
     // file
     vm->RegisterFunction("LoadJSONFile", scriptName, LoadJSONFile);
