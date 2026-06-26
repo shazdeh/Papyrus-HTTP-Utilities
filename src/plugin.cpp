@@ -8,7 +8,7 @@
 
 using JSON = nlohmann::json;
 
-std::vector<int> GetPluginVersion(StaticFunctionTag*) { return {1, 0, 4}; }
+std::vector<int> GetPluginVersion(StaticFunctionTag*) { return {1, 0, 5}; }
 
 std::string aiEndpoint = "";
 std::string aiModel = "";
